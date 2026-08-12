@@ -1,8 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using ECommerceOrderManagementApi.Configuration;
-using ECommerceOrderManagementApi.DTOs.Auth;
 using ECommerceOrderManagementApi.Entities;
 using ECommerceOrderManagementApi.Interfaces;
 using Microsoft.Extensions.Options;
@@ -14,7 +14,7 @@ public sealed class TokenService(IOptions<JwtOptions> options, TimeProvider time
 {
     private readonly JwtOptions _options = options.Value;
 
-    public AuthResponse CreateAccessToken(User user)
+    public GeneratedAccessToken CreateAccessToken(User user)
     {
         var issuedAt = timeProvider.GetUtcNow().UtcDateTime;
         var expiresAt = issuedAt.AddMinutes(_options.AccessTokenExpirationMinutes);
@@ -38,6 +38,16 @@ public sealed class TokenService(IOptions<JwtOptions> options, TimeProvider time
             expires: expiresAt,
             signingCredentials: credentials);
 
-        return new AuthResponse(new JwtSecurityTokenHandler().WriteToken(token), expiresAt);
+        return new GeneratedAccessToken(new JwtSecurityTokenHandler().WriteToken(token), expiresAt);
     }
+
+    public GeneratedRefreshToken CreateRefreshToken()
+    {
+        var token = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(64));
+        var expiresAt = timeProvider.GetUtcNow().UtcDateTime.AddDays(_options.RefreshTokenExpirationDays);
+        return new GeneratedRefreshToken(token, HashRefreshToken(token), expiresAt);
+    }
+
+    public string HashRefreshToken(string rawToken) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
 }

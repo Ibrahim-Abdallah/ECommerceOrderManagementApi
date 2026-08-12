@@ -43,8 +43,45 @@ public sealed class AuthenticationApiTests : IClassFixture<AuthenticationApiFact
         Assert.Equal(HttpStatusCode.Created, registration.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        Assert.False(string.IsNullOrWhiteSpace(auth.RefreshToken));
         Assert.Equal(HttpStatusCode.Unauthorized, anonymousProtected.StatusCode);
         Assert.Equal(HttpStatusCode.OK, authenticatedProtected.StatusCode);
+    }
+
+    [Fact]
+    public async Task RefreshRotationReplayLogoutAndValidationFollowHttpContract()
+    {
+        var email = $"refresh-{Guid.NewGuid()}@example.com";
+        await _client.PostAsJsonAsync("/api/auth/register",
+            new RegisterRequest("Ada", "Lovelace", email, "Strong1!", "Strong1!"));
+        var loginResponse = await _client.PostAsJsonAsync("/api/auth/login", new LoginRequest(email, "Strong1!"));
+        var login = await loginResponse.Content.ReadFromJsonAsync<AuthResponse>();
+
+        var refreshResponse = await _client.PostAsJsonAsync(
+            "/api/auth/refresh-token", new RefreshTokenRequest(login!.RefreshToken));
+        var refreshed = await refreshResponse.Content.ReadFromJsonAsync<AuthResponse>();
+        var replay = await _client.PostAsJsonAsync(
+            "/api/auth/refresh-token", new RefreshTokenRequest(login.RefreshToken));
+        var logout = await _client.PostAsJsonAsync(
+            "/api/auth/logout", new RefreshTokenRequest(refreshed!.RefreshToken));
+        var repeatedLogout = await _client.PostAsJsonAsync(
+            "/api/auth/logout", new RefreshTokenRequest(refreshed.RefreshToken));
+        var unknownLogout = await _client.PostAsJsonAsync(
+            "/api/auth/logout", new RefreshTokenRequest("unknown"));
+        var loggedOutRefresh = await _client.PostAsJsonAsync(
+            "/api/auth/refresh-token", new RefreshTokenRequest(refreshed.RefreshToken));
+        var invalidRequest = await _client.PostAsJsonAsync(
+            "/api/auth/refresh-token", new RefreshTokenRequest("   "));
+
+        Assert.Equal(HttpStatusCode.OK, refreshResponse.StatusCode);
+        Assert.False(string.IsNullOrWhiteSpace(refreshed.AccessToken));
+        Assert.NotEqual(login.RefreshToken, refreshed.RefreshToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, repeatedLogout.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, unknownLogout.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, loggedOutRefresh.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidRequest.StatusCode);
     }
 
     [Fact]
@@ -115,7 +152,8 @@ public sealed class AuthenticationApiFactory : WebApplicationFactory<Program>
                 ["Jwt:Issuer"] = "ECommerceOrderManagementApi",
                 ["Jwt:Audience"] = "ECommerceOrderManagementApi.Client",
                 ["Jwt:Key"] = "integration-test-signing-key-at-least-32-bytes-long",
-                ["Jwt:AccessTokenExpirationMinutes"] = "15"
+                ["Jwt:AccessTokenExpirationMinutes"] = "15",
+                ["Jwt:RefreshTokenExpirationDays"] = "7"
             }));
         builder.ConfigureServices(services =>
         {

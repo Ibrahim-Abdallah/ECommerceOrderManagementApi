@@ -39,7 +39,7 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
     }
 
     [HttpPost("login")]
-    [EndpointSummary("Log in and receive an access token")]
+    [EndpointSummary("Log in and receive an access/refresh token pair")]
     public async Task<ActionResult<AuthResponse>> Login(
         LoginRequest request,
         IValidator<LoginRequest> validator,
@@ -61,4 +61,45 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
             })
             : Ok(response);
     }
+
+    [HttpPost("refresh-token")]
+    [EndpointSummary("Rotate a refresh token and receive a new token pair")]
+    public async Task<ActionResult<AuthResponse>> RefreshToken(
+        RefreshTokenRequest request,
+        IValidator<RefreshTokenRequest> validator,
+        CancellationToken cancellationToken)
+    {
+        var validation = await validator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+        {
+            return BadRequest(new ValidationProblemDetails(validation.ToDictionary()));
+        }
+
+        var response = await authService.RefreshTokenAsync(request, cancellationToken);
+        return response is null ? InvalidRefreshToken() : Ok(response);
+    }
+
+    [HttpPost("logout")]
+    [EndpointSummary("Revoke a refresh token")]
+    public async Task<IActionResult> Logout(
+        RefreshTokenRequest request,
+        IValidator<RefreshTokenRequest> validator,
+        CancellationToken cancellationToken)
+    {
+        var validation = await validator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+        {
+            return BadRequest(new ValidationProblemDetails(validation.ToDictionary()));
+        }
+
+        await authService.LogoutAsync(request, cancellationToken);
+        return NoContent();
+    }
+
+    private UnauthorizedObjectResult InvalidRefreshToken() => Unauthorized(new ProblemDetails
+    {
+        Status = StatusCodes.Status401Unauthorized,
+        Title = "Invalid refresh token",
+        Detail = "The supplied refresh token is invalid."
+    });
 }
