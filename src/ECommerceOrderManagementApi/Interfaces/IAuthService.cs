@@ -6,6 +6,8 @@ public interface IAuthService
 {
     Task<RegistrationResult> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken);
     Task<AuthResponse?> LoginAsync(LoginRequest request, CancellationToken cancellationToken);
+    Task<AuthResponse?> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken);
+    Task LogoutAsync(RefreshTokenRequest request, CancellationToken cancellationToken);
 }
 
 public sealed record RegistrationResult(RegisterResponse? User, bool IsDuplicateEmail)

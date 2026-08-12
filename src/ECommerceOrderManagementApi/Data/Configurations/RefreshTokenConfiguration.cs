@@ -10,6 +10,7 @@ public sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refresh
     {
         builder.HasKey(token => token.Id);
         builder.Property(token => token.TokenHash).HasMaxLength(128).IsRequired();
+        builder.Property(token => token.RevokedAtUtc).IsConcurrencyToken();
         builder.HasIndex(token => token.TokenHash).IsUnique();
         builder.HasIndex(token => token.UserId);
 

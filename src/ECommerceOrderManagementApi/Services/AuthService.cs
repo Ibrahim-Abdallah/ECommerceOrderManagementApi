@@ -79,13 +79,92 @@ public sealed class AuthService(
         if (verification == PasswordVerificationResult.SuccessRehashNeeded)
         {
             user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
-            await dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        return tokenService.CreateAccessToken(user);
+        return await IssueTokenPairAsync(user, cancellationToken);
+    }
+
+    public async Task<AuthResponse?> RefreshTokenAsync(
+        RefreshTokenRequest request,
+        CancellationToken cancellationToken)
+    {
+        var tokenHash = tokenService.HashRefreshToken(request.RefreshToken);
+        var storedToken = await dbContext.RefreshTokens
+            .Include(token => token.User)
+            .SingleOrDefaultAsync(token => token.TokenHash == tokenHash, cancellationToken);
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+
+        if (storedToken is null || storedToken.RevokedAtUtc is not null || storedToken.ExpiresAtUtc <= now)
+        {
+            return null;
+        }
+
+        var accessToken = tokenService.CreateAccessToken(storedToken.User);
+        var generatedRefreshToken = tokenService.CreateRefreshToken();
+        var replacement = CreateRefreshTokenEntity(storedToken.User, generatedRefreshToken, now);
+
+        storedToken.RevokedAtUtc = now;
+        storedToken.ReplacedByToken = replacement;
+        dbContext.RefreshTokens.Add(replacement);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return null;
+        }
+
+        return new AuthResponse(accessToken.Token, generatedRefreshToken.Token, accessToken.ExpiresAtUtc);
+    }
+
+    public async Task LogoutAsync(RefreshTokenRequest request, CancellationToken cancellationToken)
+    {
+        var tokenHash = tokenService.HashRefreshToken(request.RefreshToken);
+        var storedToken = await dbContext.RefreshTokens.SingleOrDefaultAsync(
+            token => token.TokenHash == tokenHash, cancellationToken);
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+
+        if (storedToken is null || storedToken.RevokedAtUtc is not null || storedToken.ExpiresAtUtc <= now)
+        {
+            return;
+        }
+
+        storedToken.RevokedAtUtc = now;
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another request already revoked or rotated this token.
+        }
     }
 
     internal static string NormalizeEmail(string email) => email.Trim().ToUpperInvariant();
+
+    private async Task<AuthResponse> IssueTokenPairAsync(User user, CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var accessToken = tokenService.CreateAccessToken(user);
+        var generatedRefreshToken = tokenService.CreateRefreshToken();
+        dbContext.RefreshTokens.Add(CreateRefreshTokenEntity(user, generatedRefreshToken, now));
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return new AuthResponse(accessToken.Token, generatedRefreshToken.Token, accessToken.ExpiresAtUtc);
+    }
+
+    private static RefreshToken CreateRefreshTokenEntity(
+        User user,
+        GeneratedRefreshToken generatedToken,
+        DateTime createdAtUtc) => new()
+    {
+        User = user,
+        UserId = user.Id,
+        TokenHash = generatedToken.TokenHash,
+        CreatedAtUtc = createdAtUtc,
+        ExpiresAtUtc = generatedToken.ExpiresAtUtc
+    };
 
     private static bool IsUniqueConstraintViolation(DbUpdateException exception) =>
         exception.InnerException is SqlException { Number: 2601 or 2627 };
