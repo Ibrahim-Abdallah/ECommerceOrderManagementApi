@@ -3,10 +3,12 @@ using System.Text;
 using ECommerceOrderManagementApi.Configuration;
 using ECommerceOrderManagementApi.Data;
 using ECommerceOrderManagementApi.Entities;
+using ECommerceOrderManagementApi.Errors;
 using ECommerceOrderManagementApi.Interfaces;
 using ECommerceOrderManagementApi.Services;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -16,19 +18,39 @@ using Scalar.AspNetCore;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
-builder.Services.AddOpenApi(options => options.AddDocumentTransformer((document, _, _) =>
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<UnexpectedExceptionHandler>();
+builder.Services.AddOpenApi(options =>
 {
-    document.Components ??= new OpenApiComponents();
-    document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
-    document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+    options.AddDocumentTransformer((document, _, _) =>
     {
-        Type = SecuritySchemeType.Http,
-        Scheme = JwtBearerDefaults.AuthenticationScheme,
-        BearerFormat = "JWT",
-        Description = "Enter a JWT access token."
-    };
-    return Task.CompletedTask;
-}));
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = JwtBearerDefaults.AuthenticationScheme,
+            BearerFormat = "JWT",
+            Description = "Enter a JWT access token."
+        };
+        return Task.CompletedTask;
+    });
+    options.AddOperationTransformer((operation, context, _) =>
+    {
+        var metadata = context.Description.ActionDescriptor.EndpointMetadata;
+        var requiresAuthorization = metadata.OfType<IAuthorizeData>().Any() &&
+            !metadata.OfType<IAllowAnonymous>().Any();
+        if (requiresAuthorization)
+        {
+            operation.Security ??= [];
+            operation.Security.Add(new OpenApiSecurityRequirement
+            {
+                [new OpenApiSecuritySchemeReference("Bearer", context.Document)] = []
+            });
+        }
+        return Task.CompletedTask;
+    });
+});
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddValidatorsFromAssemblyContaining<Program>();
@@ -75,7 +97,8 @@ builder.Services.AddScoped<IReportingService, ReportingService>();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+app.UseExceptionHandler();
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
